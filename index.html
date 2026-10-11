@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Polycube Puzzle Solver</title>
+    <!-- Tailwind CSS (v4) for clean UI layout -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    
+    <!-- Native Browser Import Map Configuration for Three.js Modern Modules -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+    <style>
+        body { margin: 0; background-color: #0f172a; color: #f8fafc; font-family: sans-serif; }
+        #canvas-container { width: 100%; height: 500px; background: #1e293b; border-radius: 8px; position: relative; }
+        .voxel-layer-btn { transition: all 0.2s ease; }
+    </style>
+</head>
+<body class="p-6">
+
+    <div class="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <!-- Left Panel: Controls & Inputs -->
+        <div class="bg-slate-900 p-6 rounded-xl border border-slate-800 flex flex-col gap-4">
+            <div>
+                <h1 class="text-2xl font-bold text-teal-400">3D Polycube Solver</h1>
+                <p class="text-slate-400 text-sm mt-1">Fills a target shape you design, inside an NxNxN grid, using a slot-first backtracking algorithm. Safely filters redundant blocks!</p>
+            </div>
+
+            <!-- Grid Size (shared by the block editor and the target editor) -->
+            <div class="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                <div class="flex items-center justify-between">
+                    <span class="text-sm font-semibold text-slate-300">Grid Size (input &amp; output):</span>
+                    <div id="grid-size-buttons" class="flex gap-1"></div>
+                </div>
+            </div>
+
+            <!-- Target Shape Editor -->
+            <div class="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-semibold text-slate-300">Target Shape:</span>
+                    <span id="target-total" class="text-xs text-slate-400"></span>
+                </div>
+                <div class="flex gap-2 mb-3">
+                    <button id="target-fill" class="bg-slate-700 hover:bg-slate-600 text-xs px-2 py-1 rounded cursor-pointer text-slate-200">Fill Cube</button>
+                    <button id="target-clear" class="bg-slate-700 hover:bg-slate-600 text-xs px-2 py-1 rounded cursor-pointer text-slate-200">Clear</button>
+                </div>
+                <div id="target-layers" class="flex flex-wrap gap-x-3 gap-y-2 select-none"></div>
+                <div class="text-xs mt-2 text-slate-400">Click or drag to paint, start on a filled cell to erase. The solver fills exactly these cells.</div>
+            </div>
+
+            <!-- Visual Block Editor -->
+            <div class="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-semibold text-slate-300">Visual Block Editor:</span>
+                    <span id="editor-total" class="text-xs text-slate-400"></span>
+                </div>
+                <div id="editor-piece-list" class="flex flex-wrap gap-1 mb-3"></div>
+                <div id="editor-body">
+                    <div class="flex gap-2 items-center mb-3">
+                        <input id="editor-name" type="text" class="flex-1 min-w-0 bg-slate-950 text-slate-200 text-xs px-2 py-1 rounded border border-slate-700 focus:outline-none focus:border-teal-500">
+                        <input id="editor-color" type="color" class="w-8 h-7 bg-transparent cursor-pointer">
+                        <button id="editor-clear" class="bg-slate-700 hover:bg-slate-600 text-xs px-2 py-1 rounded cursor-pointer text-slate-200">Clear</button>
+                        <button id="editor-delete" class="bg-red-900 hover:bg-red-800 text-xs px-2 py-1 rounded cursor-pointer text-red-100">Delete</button>
+                    </div>
+                    <div id="editor-layers" class="flex flex-wrap gap-x-3 gap-y-2 select-none"></div>
+                    <div id="editor-hint" class="text-xs mt-2 text-slate-400"></div>
+                </div>
+                <div id="editor-empty" class="hidden text-xs text-slate-500">No pieces yet. Click "+ New" to add one.</div>
+            </div>
+
+            <!-- Block Input Field Data -->
+            <div class="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                <label class="block text-sm font-semibold text-slate-300 mb-2">Block Input Dataset (JSON):</label>
+                <textarea id="piece-input" class="w-full h-48 bg-slate-950 text-emerald-400 font-mono text-xs p-2 rounded border border-slate-700 focus:outline-none focus:border-teal-500"></textarea>
+                <div class="flex gap-2 mt-2">
+                    <button id="btn-load-exact" class="bg-slate-700 hover:bg-slate-600 text-xs px-2 py-1 rounded cursor-pointer text-slate-200">Load Exact (3x3x3 cube)</button>
+                    <button id="btn-load-redundant" class="bg-slate-700 hover:bg-slate-600 text-xs px-2 py-1 rounded cursor-pointer text-slate-200">Load Redundant (3x3x3 cube)</button>
+                </div>
+            </div>
+
+            <!-- Core Buttons -->
+            <div class="flex flex-col gap-2">
+                <button id="btn-solve" class="w-full bg-teal-500 hover:bg-teal-600 text-slate-950 font-bold py-2 px-4 rounded-lg cursor-pointer transition">
+                    Solve Puzzle
+                </button>
+                <div id="status-text" class="text-center font-medium text-slate-400 text-sm py-1">Ready to search.</div>
+            </div>
+
+            <!-- Horizontal Cross-section Controls -->
+            <div class="border-t border-slate-800 pt-4">
+                <span class="block text-sm font-semibold text-slate-300 mb-2">Layer Visibility Filters:</span>
+                <div id="layer-buttons" class="grid gap-2"></div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Canvas Panel -->
+        <div class="lg:col-span-2 flex flex-col gap-4">
+            <div id="canvas-container" class="shadow-2xl border border-slate-800">
+                <div class="absolute top-3 left-3 bg-slate-950/80 backdrop-blur px-3 py-1 rounded text-xs text-slate-400 pointer-events-none z-10">
+                    Left Click + Drag: Rotate Scene | Right Click + Drag: Pan | Scroll: Zoom
+                </div>
+            </div>
+            
+            <!-- Information Action Logs -->
+            <div class="bg-slate-900 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-400 max-h-32 overflow-y-auto" id="log-box">
+                [System] Initialization complete. Canvas is ready.<br>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modern Modular ES6 Script Execution Core -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        const GRID_SIZES = [2, 3, 4, 5];
+        let gridSize = 3;
+        // Target shape = set of "x,y,z" keys the solver must fill exactly.
+        let targetCells = new Set();
+        const cellKey = (x, y, z) => `${x},${y},${z}`;
+        const fullCube = n => {
+            const cells = new Set();
+            for (let x = 0; x < n; x++) for (let y = 0; y < n; y++) for (let z = 0; z < n; z++) cells.add(cellKey(x, y, z));
+            return cells;
+        };
+        targetCells = fullCube(gridSize);
+
+        const exactDataset = [
+            { id: "Corner", color: "#f87171", shape: [{x:0,y:0,z:0}] }, 
+            { id: "Line-2", color: "#fb923c", shape: [{x:0,y:0,z:0}, {x:1,y:0,z:0}] }, 
+            { id: "L-Shape", color: "#fbbf24", shape: [{x:0,y:0,z:0}, {x:1,y:0,z:0}, {x:0,y:1,z:0}, {x:0,y:0,z:1}] }, 
+            { id: "T-Shape", color: "#34d399", shape: [{x:0,y:0,z:0}, {x:1,y:0,z:0}, {x:2,y:0,z:0}, {x:1,y:1,z:0}] }, 
+            { id: "Z-Shape", color: "#22d3ee", shape: [{x:0,y:0,z:0}, {x:1,y:0,z:0}, {x:1,y:1,z:0}, {x:2,y:1,z:0}] }, 
+            { id: "S-Block", color: "#60a5fa", shape: [{x:0,y:0,z:0}, {x:0,y:1,z:0}, {x:1,y:1,z:0}, {x:0,y:1,z:1}] }, 
+            { id: "Big-Block", color: "#c084fc", shape: [{x:0,y:0,z:0}, {x:1,y:0,z:0}, {x:0,y:1,z:0}, {x:1,y:1,z:0}, {x:0,y:0,z:1}, {x:1,y:0,z:1}, {x:0,y:1,z:1}, {x:1,y:1,z:1}] } 
+        ];
+
+        const redundantDataset = [
+            ...exactDataset,
+            { id: "Extra-1", color: "#e2e8f0", shape: [{x:0,y:0,z:0}, {x:1,y:0,z:0}, {x:2,y:0,z:0}] }, 
+            { id: "Extra-2", color: "#ec4899", shape: [{x:0,y:0,z:0}, {x:0,y:1,z:0}, {x:0,y:2,z:0}, {x:1,y:1,z:0}] } 
+        ];
+
+        const SEARCH_NODE_LIMIT = 3_000_000;
+
+        class PuzzleSolver {
+            constructor(inputPieces, size, target) {
+                this.size = size;
+                this.emptyCount = target.size;
+                this.nodes = 0;
+                this.aborted = false;
+                this.grid = [];
+                this.gridColors = [];
+                this.pieces = inputPieces;
+                this.pieceUsed = new Array(inputPieces.length).fill(false);
+                this.remainingVolume = inputPieces.reduce((n, p) => n + p.shape.length, 0);
+                
+                for (let x = 0; x < this.size; x++) {
+                    this.grid[x] = [];
+                    this.gridColors[x] = [];
+                    for (let y = 0; y < this.size; y++) {
+                        // "." = cell to fill, "#" = outside the target shape
+                        this.grid[x][y] = Array.from({ length: this.size }, (_, z) => target.has(cellKey(x, y, z)) ? "." : "#");
+                        this.gridColors[x][y] = new Array(this.size).fill("");
+                    }
+                }
+                
+                this.pieces.forEach(p => {
+                    p.orientations = this.generateAllUniqueRotations(p.shape);
+                });
+            }
+
+            generateAllUniqueRotations(shape) {
+                const uniqueSets = new Set();
+                const output = [];
+
+                for (let xRot = 0; xRot < 4; xRot++) {
+                    for (let yRot = 0; yRot < 4; yRot++) {
+                        for (let zRot = 0; zRot < 4; zRot++) {
+                            const rotated = shape.map(p => this.rotate3D(p, xRot, yRot, zRot));
+                            const normalized = this.normalizeToOrigin(rotated);
+                            const stringKey = JSON.stringify(normalized);
+
+                            if (!uniqueSets.has(stringKey)) {
+                                uniqueSets.add(stringKey);
+                                output.push(normalized);
+                            }
+                        }
+                    }
+                }
+                return output;
+            }
+
+            rotate3D(p, xRot, yRot, zRot) {
+                let x = p.x, y = p.y, z = p.z;
+                for (let i = 0; i < xRot; i++) { const tmp = y; y = -z; z = tmp; }
+                for (let i = 0; i < yRot; i++) { const tmp = x; x = z; z = -tmp; }
+                for (let i = 0; i < zRot; i++) { const tmp = x; x = -y; y = tmp; }
+                return { x, y, z };
+            }
+
+            normalizeToOrigin(shape) {
+                let minX = Infinity, minY = Infinity, minZ = Infinity;
+                shape.forEach(p => {
+                    if (p.x < minX) minX = p.x;
+                    if (p.y < minY) minY = p.y;
+                    if (p.z < minZ) minZ = p.z;
+                });
+                return shape.map(p => ({ x: p.x - minX, y: p.y - minY, z: p.z - minZ }))
+                            .sort((a, b) => a.x !== b.x ? a.x - b.x : (a.y !== b.y ? a.y - b.y : a.z - b.z));
+            }
+
+            solveGrid() {
+                let targetX = -1, targetY = -1, targetZ = -1;
+                let foundEmpty = false;
+
+                for (let x = 0; x < this.size && !foundEmpty; x++) {
+                    for (let y = 0; y < this.size && !foundEmpty; y++) {
+                        for (let z = 0; z < this.size && !foundEmpty; z++) {
+                            if (this.grid[x][y][z] === ".") {
+                                targetX = x; targetY = y; targetZ = z;
+                                foundEmpty = true;
+                            }
+                        }
+                    }
+                }
+
+                if (!foundEmpty) return true;
+                if (this.remainingVolume < this.emptyCount) return false;
+                if (++this.nodes > SEARCH_NODE_LIMIT) { this.aborted = true; return false; }
+
+                for (let i = 0; i < this.pieces.length; i++) {
+                    if (!this.pieceUsed[i]) {
+                        const piece = this.pieces[i];
+                        const size = piece.shape.length;
+                        
+                        for (const orient of piece.orientations) {
+                            // Orientations are sorted, so orient[0] is the first cell in scan order;
+                            // it must land on the first empty cell for the piece to cover it.
+                            const bx = targetX - orient[0].x, by = targetY - orient[0].y, bz = targetZ - orient[0].z;
+                            if (this.canPlaceBlock(orient, bx, by, bz)) {
+                                this.toggleBlockState(orient, bx, by, bz, piece.id, piece.color);
+                                this.pieceUsed[i] = true;
+                                this.emptyCount -= size;
+                                this.remainingVolume -= size;
+
+                                if (this.solveGrid()) return true;
+
+                                this.emptyCount += size;
+                                this.remainingVolume += size;
+                                this.toggleBlockState(orient, bx, by, bz, ".", "");
+                                this.pieceUsed[i] = false;
+                                if (this.aborted) return false;
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
+
+            canPlaceBlock(orient, bx, by, bz) {
+                for (const p of orient) {
+                    const tx = bx + p.x; const ty = by + p.y; const tz = bz + p.z;
+                    if (tx < 0 || ty < 0 || tz < 0 || tx >= this.size || ty >= this.size || tz >= this.size) return false;
+                    if (this.grid[tx][ty][tz] !== ".") return false;
+                }
+                return true;
+            }
+
+            toggleBlockState(orient, bx, by, bz, id, color) {
+                orient.forEach(p => {
+                    this.grid[bx + p.x][by + p.y][bz + p.z] = id;
+                    this.gridColors[bx + p.x][by + p.y][bz + p.z] = color;
+                });
+            }
+        }
+
+        let scene, camera, renderer, controls;
+        let meshGroup = new THREE.Group();
+        let currentActiveLayerFilter = "all";
+        let localSolverInstance = null;
+
+        function init3DEnvironment() {
+            const container = document.getElementById("canvas-container");
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1e293b);
+
+            camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(6, 6, 8);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+            dirLight.position.set(10, 15, 10);
+            scene.add(dirLight);
+
+            scene.add(meshGroup);
+            frameCamera();
+
+            window.addEventListener('resize', () => {
+                camera.aspect = container.clientWidth / container.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(container.clientWidth, container.clientHeight);
+            });
+
+            animate();
+        }
+
+        function frameCamera() {
+            const spacing = 1.05;
+            const c = (gridSize - 1) / 2 * spacing;
+            const d = gridSize * spacing;
+            controls.target.set(c, c, c);
+            camera.position.set(c + d * 1.6, c + d * 1.6, c + d * 2.2);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function update3DViewportVisuals() {
+            while(meshGroup.children.length > 0){
+                meshGroup.remove(meshGroup.children[0]);
+            }
+
+            const spacing = 1.05;
+            const geometry = new THREE.BoxGeometry(0.95, 0.95, 0.95);
+            const edges = new THREE.EdgesGeometry(geometry);
+
+            const addCube = (x, y, z, color, ghost) => {
+                if (currentActiveLayerFilter !== "all" && z.toString() !== currentActiveLayerFilter) return;
+                const material = new THREE.MeshStandardMaterial({
+                    color: new THREE.Color(color),
+                    roughness: 0.2,
+                    metalness: 0.1,
+                    transparent: ghost,
+                    opacity: ghost ? 0.25 : 1
+                });
+                const mesh = new THREE.Mesh(geometry, material);
+                mesh.position.set(x * spacing, y * spacing, z * spacing);
+                mesh.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: ghost ? 0x2dd4bf : 0x0f172a })));
+                meshGroup.add(mesh);
+            };
+
+            if (localSolverInstance) {
+                const n = localSolverInstance.size;
+                for (let x = 0; x < n; x++) {
+                    for (let y = 0; y < n; y++) {
+                        for (let z = 0; z < n; z++) {
+                            const blockId = localSolverInstance.grid[x][y][z];
+                            if (blockId !== "." && blockId !== "#") {
+                                addCube(x, y, z, localSolverInstance.gridColors[x][y][z], false);
+                            }
+                        }
+                    }
+                }
+            } else {
+                // No solution yet: preview the target shape as translucent ghost cubes.
+                targetCells.forEach(key => {
+                    const [x, y, z] = key.split(",").map(Number);
+                    addCube(x, y, z, "#2dd4bf", true);
+                });
+            }
+        }
+
+        function logger(msg) {
+            const b = document.getElementById("log-box");
+            b.innerHTML += `[Log] ${msg}<br>`;
+            b.scrollTop = b.scrollHeight;
+        }
+
+        // ---- Visual Block Editors (voxels constrained to the gridSize^3 grid) ----
+        const editorPalette = ["#f87171", "#fb923c", "#fbbf24", "#34d399", "#22d3ee", "#60a5fa", "#c084fc", "#ec4899", "#a3e635", "#e2e8f0"];
+        const pieceInput = document.getElementById("piece-input");
+        let editorPieces = [];
+        let editorSelected = -1;
+        let paintMode = null; // "add" | "remove" while dragging across cells
+        let paintHandler = null; // the grid being painted by the current drag
+
+        const inCube = v => [v.x, v.y, v.z].every(c => Number.isInteger(c) && c >= 0 && c < gridSize);
+        const hasVoxel = (shape, x, y, z) => shape.some(v => v.x === x && v.y === y && v.z === z);
+
+        function isFaceConnected(shape) {
+            if (shape.length <= 1) return true;
+            const seen = new Set([0]);
+            const queue = [0];
+            while (queue.length) {
+                const a = shape[queue.shift()];
+                shape.forEach((b, i) => {
+                    if (!seen.has(i) && Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z) === 1) {
+                        seen.add(i);
+                        queue.push(i);
+                    }
+                });
+            }
+            return seen.size === shape.length;
+        }
+
+        // Pull pieces from the JSON textarea into the editor. Returns false if the JSON isn't a valid piece array.
+        function syncEditorFromText() {
+            let parsed;
+            try { parsed = JSON.parse(pieceInput.value); } catch { return false; }
+            if (!Array.isArray(parsed)) return false;
+
+            const clipped = [];
+            editorPieces = parsed.map((p, i) => {
+                let shape = Array.isArray(p?.shape) ? p.shape.map(v => ({ x: v?.x, y: v?.y, z: v?.z })) : [];
+                if (!shape.every(inCube)) {
+                    // Shift to origin first so shapes that merely sit outside the cube still fit.
+                    const valid = shape.filter(v => [v.x, v.y, v.z].every(Number.isInteger));
+                    const min = axis => Math.min(...valid.map(v => v[axis]));
+                    const mx = min("x"), my = min("y"), mz = min("z");
+                    const shifted = valid.map(v => ({ x: v.x - mx, y: v.y - my, z: v.z - mz }));
+                    const kept = shifted.filter(inCube);
+                    if (kept.length !== shape.length) clipped.push(p?.id ?? `#${i + 1}`);
+                    shape = kept;
+                }
+                shape = shape.filter((v, j) => shape.findIndex(w => w.x === v.x && w.y === v.y && w.z === v.z) === j);
+                return {
+                    id: String(p?.id ?? `Piece-${i + 1}`),
+                    color: typeof p?.color === "string" ? p.color : editorPalette[i % editorPalette.length],
+                    shape
+                };
+            });
+
+            if (clipped.length) {
+                logger(`Editor: voxels outside the ${gridSize}x${gridSize}x${gridSize} grid were dropped from ${clipped.join(", ")} (only applies if you edit in the editor).`);
+            }
+            if (editorSelected >= editorPieces.length) editorSelected = editorPieces.length - 1;
+            if (editorSelected < 0 && editorPieces.length) editorSelected = 0;
+            renderEditor();
+            return true;
+        }
+
+        function syncTextFromEditor() {
+            const sortVoxels = shape => [...shape].sort((a, b) => a.x - b.x || a.y - b.y || a.z - b.z);
+            pieceInput.value = JSON.stringify(
+                editorPieces.map(p => ({ id: p.id, color: p.color, shape: sortVoxels(p.shape) })), null, 2);
+        }
+
+        function renderEditor() {
+            renderPieceList();
+            const piece = editorPieces[editorSelected];
+            document.getElementById("editor-body").classList.toggle("hidden", !piece);
+            document.getElementById("editor-empty").classList.toggle("hidden", !!piece);
+            if (piece) {
+                document.getElementById("editor-name").value = piece.id;
+                document.getElementById("editor-color").value = /^#[0-9a-f]{6}$/i.test(piece.color) ? piece.color : "#ffffff";
+                renderLayers();
+            }
+            renderEditorStats();
+        }
+
+        function renderPieceList() {
+            const list = document.getElementById("editor-piece-list");
+            list.replaceChildren();
+            editorPieces.forEach((p, i) => {
+                const chip = document.createElement("button");
+                chip.className = "flex items-center gap-1 text-xs px-2 py-1 rounded cursor-pointer border " +
+                    (i === editorSelected ? "border-teal-400 bg-slate-950 text-slate-100" : "border-slate-700 bg-slate-900 text-slate-400 hover:bg-slate-700");
+                const swatch = document.createElement("span");
+                swatch.className = "inline-block w-2.5 h-2.5 rounded-sm";
+                swatch.style.background = p.color;
+                const label = document.createElement("span");
+                label.textContent = `${p.id} (${p.shape.length})`;
+                chip.append(swatch, label);
+                chip.addEventListener("click", () => { editorSelected = i; renderEditor(); });
+                list.appendChild(chip);
+            });
+            const addBtn = document.createElement("button");
+            addBtn.className = "text-xs px-2 py-1 rounded cursor-pointer border border-dashed border-teal-600 text-teal-400 hover:bg-slate-700";
+            addBtn.textContent = "+ New";
+            addBtn.addEventListener("click", addEditorPiece);
+            list.appendChild(addBtn);
+        }
+
+        // Draws one gridSize x gridSize layer per Z. Painting calls onPaint(x, y, z, on).
+        function renderLayerGrids(container, isFilled, color, onPaint) {
+            const cellPx = gridSize <= 3 ? 28 : gridSize === 4 ? 24 : 20;
+            container.replaceChildren();
+            for (let z = 0; z < gridSize; z++) {
+                const col = document.createElement("div");
+                const title = document.createElement("div");
+                title.className = "text-[10px] text-slate-400 text-center mb-1";
+                title.textContent = `Z = ${z}`;
+                const grid = document.createElement("div");
+                grid.className = "grid gap-0.5";
+                grid.style.gridTemplateColumns = `repeat(${gridSize}, ${cellPx}px)`;
+                // Rows top-to-bottom = y high-to-low, so the grid matches the 3D view (y up).
+                for (let y = gridSize - 1; y >= 0; y--) {
+                    for (let x = 0; x < gridSize; x++) {
+                        const cell = document.createElement("div");
+                        const filled = isFilled(x, y, z);
+                        cell.className = "rounded-sm border cursor-pointer " +
+                            (filled ? "border-slate-950" : "border-slate-700 bg-slate-950 hover:bg-slate-700");
+                        cell.style.width = cell.style.height = `${cellPx}px`;
+                        if (filled) cell.style.background = color;
+                        cell.title = `x=${x}, y=${y}, z=${z}`;
+                        cell.addEventListener("pointerdown", e => {
+                            e.preventDefault();
+                            paintMode = filled ? "remove" : "add";
+                            paintHandler = onPaint;
+                            onPaint(x, y, z, paintMode === "add");
+                        });
+                        cell.addEventListener("pointerenter", () => {
+                            if (paintMode && paintHandler === onPaint) onPaint(x, y, z, paintMode === "add");
+                        });
+                        grid.appendChild(cell);
+                    }
+                }
+                col.append(title, grid);
+                container.appendChild(col);
+            }
+        }
+
+        function renderLayers() {
+            const piece = editorPieces[editorSelected];
+            renderLayerGrids(document.getElementById("editor-layers"),
+                (x, y, z) => hasVoxel(piece.shape, x, y, z), piece.color, setVoxel);
+        }
+
+        const TARGET_COLOR = "#2dd4bf";
+
+        function renderTarget() {
+            renderLayerGrids(document.getElementById("target-layers"),
+                (x, y, z) => targetCells.has(cellKey(x, y, z)), TARGET_COLOR, setTargetVoxel);
+        }
+
+        function setTargetVoxel(x, y, z, on) {
+            const key = cellKey(x, y, z);
+            if (targetCells.has(key) === on) return;
+            if (on) targetCells.add(key); else targetCells.delete(key);
+            targetChanged();
+            renderTarget();
+        }
+
+        // The old solution no longer matches; fall back to the ghost preview.
+        function targetChanged() {
+            localSolverInstance = null;
+            update3DViewportVisuals();
+            renderEditorStats();
+        }
+
+        function renderEditorStats() {
+            const total = editorPieces.reduce((n, p) => n + p.shape.length, 0);
+            const needed = targetCells.size;
+            const targetEl = document.getElementById("target-total");
+            targetEl.textContent = `${needed} cell${needed === 1 ? "" : "s"}`;
+            targetEl.className = "text-xs " + (needed > 0 ? "text-slate-400" : "text-amber-400");
+            const totalEl = document.getElementById("editor-total");
+            totalEl.textContent = `${total} / ${needed} units needed`;
+            totalEl.className = "text-xs " + (needed > 0 && total >= needed ? "text-emerald-400" : "text-amber-400");
+
+            const piece = editorPieces[editorSelected];
+            const hint = document.getElementById("editor-hint");
+            if (!piece) return;
+            const voxelLabel = `${piece.shape.length} voxel${piece.shape.length === 1 ? "" : "s"}`;
+            if (piece.shape.length === 0) {
+                hint.textContent = "Empty piece — click or drag across cells to add voxels. Empty pieces are ignored by the solver.";
+                hint.className = "text-xs mt-2 text-slate-500";
+            } else if (!isFaceConnected(piece.shape)) {
+                hint.textContent = `${voxelLabel} — ⚠️ not face-connected (still solvable, but not a physical single block).`;
+                hint.className = "text-xs mt-2 text-amber-400";
+            } else {
+                hint.textContent = `${voxelLabel} — click or drag to paint, start on a filled cell to erase.`;
+                hint.className = "text-xs mt-2 text-slate-400";
+            }
+        }
+
+        function setVoxel(x, y, z, on) {
+            const piece = editorPieces[editorSelected];
+            if (!piece || hasVoxel(piece.shape, x, y, z) === on) return;
+            piece.shape = on
+                ? [...piece.shape, { x, y, z }]
+                : piece.shape.filter(v => !(v.x === x && v.y === y && v.z === z));
+            syncTextFromEditor();
+            renderPieceList();
+            renderLayers();
+            renderEditorStats();
+        }
+
+        function addEditorPiece() {
+            const ids = new Set(editorPieces.map(p => p.id));
+            let n = editorPieces.length + 1;
+            while (ids.has(`Piece-${n}`)) n++;
+            editorPieces.push({ id: `Piece-${n}`, color: editorPalette[editorPieces.length % editorPalette.length], shape: [] });
+            editorSelected = editorPieces.length - 1;
+            syncTextFromEditor();
+            renderEditor();
+        }
+
+        window.addEventListener("pointerup", () => { paintMode = null; });
+
+        document.getElementById("editor-name").addEventListener("input", e => {
+            const piece = editorPieces[editorSelected];
+            if (!piece) return;
+            piece.id = e.target.value;
+            syncTextFromEditor();
+            renderPieceList();
+        });
+
+        document.getElementById("editor-color").addEventListener("input", e => {
+            const piece = editorPieces[editorSelected];
+            if (!piece) return;
+            piece.color = e.target.value;
+            syncTextFromEditor();
+            renderPieceList();
+            renderLayers();
+        });
+
+        document.getElementById("editor-clear").addEventListener("click", () => {
+            const piece = editorPieces[editorSelected];
+            if (!piece) return;
+            piece.shape = [];
+            syncTextFromEditor();
+            renderEditor();
+        });
+
+        document.getElementById("editor-delete").addEventListener("click", () => {
+            if (editorSelected < 0) return;
+            const [removed] = editorPieces.splice(editorSelected, 1);
+            editorSelected = Math.min(editorSelected, editorPieces.length - 1);
+            syncTextFromEditor();
+            renderEditor();
+            logger(`Editor: removed piece "${removed.id}".`);
+        });
+
+        // Typing valid JSON in the textarea updates the editor; invalid intermediate states are ignored.
+        pieceInput.addEventListener("input", () => { syncEditorFromText(); });
+
+        // ---- Grid size ----
+        function renderGridSizeButtons() {
+            const box = document.getElementById("grid-size-buttons");
+            box.replaceChildren();
+            GRID_SIZES.forEach(n => {
+                const btn = document.createElement("button");
+                btn.textContent = `${n}x${n}`;
+                btn.className = "text-xs px-2 py-1 rounded cursor-pointer " +
+                    (n === gridSize ? "bg-teal-500 text-slate-950 font-bold" : "bg-slate-900 text-slate-400 hover:bg-slate-700");
+                btn.addEventListener("click", () => setGridSize(n));
+                box.appendChild(btn);
+            });
+        }
+
+        function renderLayerButtons() {
+            const box = document.getElementById("layer-buttons");
+            box.replaceChildren();
+            box.style.gridTemplateColumns = `repeat(${gridSize + 1}, minmax(0, 1fr))`;
+            const filters = ["all", ...Array.from({ length: gridSize }, (_, z) => String(z))];
+            filters.forEach(lay => {
+                const btn = document.createElement("button");
+                btn.textContent = lay === "all" ? "All Layers" : `Z = ${lay}`;
+                const setStyle = active => {
+                    btn.className = "text-xs p-2 rounded cursor-pointer voxel-layer-btn " +
+                        (active ? "bg-teal-500 text-slate-950 font-bold" : "bg-slate-800 text-slate-400 hover:bg-slate-700");
+                };
+                setStyle(lay === currentActiveLayerFilter);
+                btn.addEventListener("click", () => {
+                    currentActiveLayerFilter = lay;
+                    renderLayerButtons();
+                    update3DViewportVisuals();
+                    logger(lay === "all" ? "Showing all layers." : `Isolating viewpoint to layer: Z = ${lay}`);
+                });
+                box.appendChild(btn);
+            });
+        }
+
+        function setGridSize(n, { keepData = false } = {}) {
+            const wasFull = targetCells.size === gridSize ** 3;
+            gridSize = n;
+            currentActiveLayerFilter = "all";
+            localSolverInstance = null;
+
+            if (!keepData) {
+                // A full-cube target follows the new size; a custom shape is clipped to it.
+                const before = targetCells.size;
+                targetCells = wasFull ? fullCube(n) : new Set([...targetCells].filter(k => k.split(",").every(c => Number(c) < n)));
+                if (!wasFull && targetCells.size < before) logger(`Target: ${before - targetCells.size} cell(s) outside the ${n}x${n}x${n} grid were dropped.`);
+                // Re-parse pieces so shapes are clipped to the new grid.
+                if (!syncEditorFromText()) renderEditor();
+                else syncTextFromEditor();
+            }
+
+            renderGridSizeButtons();
+            renderLayerButtons();
+            renderTarget();
+            renderEditor();
+            if (controls) frameCamera();
+            update3DViewportVisuals();
+            document.getElementById("status-text").innerText = "Ready to search.";
+            logger(`Grid size set to ${n}x${n}x${n}.`);
+        }
+
+        function loadPreset(dataset, message) {
+            gridSize = 3;
+            targetCells = fullCube(3);
+            pieceInput.value = JSON.stringify(dataset, null, 2);
+            setGridSize(3, { keepData: true });
+            syncEditorFromText();
+            logger(message);
+        }
+
+        document.getElementById("btn-load-exact").addEventListener("click", () =>
+            loadPreset(exactDataset, "Loaded standard setup (3x3x3 cube). Requires all blocks to build the cube."));
+
+        document.getElementById("btn-load-redundant").addEventListener("click", () =>
+            loadPreset(redundantDataset, "Loaded optional subset data blocks (3x3x3 cube). Solver automatically bypasses extra volume."));
+
+        document.getElementById("target-fill").addEventListener("click", () => {
+            targetCells = fullCube(gridSize);
+            targetChanged();
+            renderTarget();
+        });
+
+        document.getElementById("target-clear").addEventListener("click", () => {
+            targetCells = new Set();
+            targetChanged();
+            renderTarget();
+        });
+
+        document.getElementById("btn-solve").addEventListener("click", () => {
+            try {
+                const parsedPieces = JSON.parse(pieceInput.value).filter(p => p.shape.length > 0);
+                let countUnits = 0;
+                parsedPieces.forEach(p => countUnits += p.shape.length);
+
+                if (targetCells.size === 0) {
+                    document.getElementById("status-text").innerText = "⚠️ Target shape is empty!";
+                    logger("Error: Design a target shape first.");
+                    return;
+                }
+
+                if (countUnits < targetCells.size) {
+                    document.getElementById("status-text").innerText = `⚠️ Total units below ${targetCells.size}!`;
+                    logger(`Error: Combined piece units sum is only ${countUnits} but the target needs ${targetCells.size}. Impossible to build.`);
+                    return;
+                }
+
+                document.getElementById("status-text").innerText = "🔄 Computing alignments...";
+                logger(`Running backtracking engine on ${parsedPieces.length} components (${countUnits} total units)...`);
+
+                setTimeout(() => {
+                    const t0 = performance.now();
+                    localSolverInstance = new PuzzleSolver(parsedPieces, gridSize, targetCells);
+                    const success = localSolverInstance.solveGrid();
+                    const t1 = performance.now();
+
+                    if (success) {
+                        document.getElementById("status-text").innerHTML = "✅ Solved Successfully!";
+                        logger(`Success! Puzzle calculated in ${(t1 - t0).toFixed(1)} ms.`);
+                        update3DViewportVisuals();
+                    } else if (localSolverInstance.aborted) {
+                        localSolverInstance = null;
+                        document.getElementById("status-text").innerHTML = "⏱️ Search Too Large";
+                        logger(`Search stopped after ${SEARCH_NODE_LIMIT.toLocaleString()} steps without an answer. Try a smaller grid or fewer pieces.`);
+                    } else {
+                        localSolverInstance = null;
+                        document.getElementById("status-text").innerHTML = "❌ Solution Unobtainable";
+                        logger("Backtracking finished. Valid structural layout permutations are impossible with these configurations.");
+                    }
+                }, 50);
+
+            } catch (err) {
+                document.getElementById("status-text").innerText = "⚠️ JSON Format Parsing Error";
+                logger("Error parsing structural configuration map array. Confirm format integrity looks valid.");
+            }
+        });
+
+        pieceInput.value = JSON.stringify(redundantDataset, null, 2);
+        setGridSize(3, { keepData: true });
+        syncEditorFromText();
+        init3DEnvironment();
+    </script>
+</body>
+</html>
